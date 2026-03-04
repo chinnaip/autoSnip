@@ -225,11 +225,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     // MARK: AirDrop
 
     private func shareViaAirDrop(fileURL: URL) {
-        // Issue #8: guard against re-entry — a second hotkey press while sharing is active
-        // would open a new sheet, stack windows, and confuse the retry click loop.
-        guard !isSharing else {
-            dbg("airdrop_skipped: already sharing")
-            return
+        // Issue #9: each hotkey press should send the new snip, even if a previous share
+        // is still in progress. Reset the flag so the new capture proceeds immediately.
+        // (The old sheet will be orphaned and eventually dismissed by macOS.)
+        if isSharing {
+            dbg("airdrop_restart: cancelling previous share for new snip")
         }
         isSharing = true
         guard let service = NSSharingService(named: .sendViaAirDrop) else {

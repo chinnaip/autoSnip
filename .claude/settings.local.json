@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sw_vers:*)",
+      "Bash(system_profiler SPHardwareDataType:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(swiftc:*)",
+      "Bash(pkill:*)",
+      "Bash(bash:*)",
+      "Bash(log show:*)",
+      "Bash(pgrep:*)",
+      "Bash(sqlite3:*)",
+      "Bash(security find-identity:*)",
+      "Bash(open:*)",
+      "Bash(/tmp/test_hotkey2.swift:*)",
+      "Bash(codesign:*)",
+      "Bash(tccutil reset:*)",
+      "Bash(/tmp/openssl_codesign.cnf:*)",
+      "Bash(security add-trusted-cert:*)",
+      "Bash(osascript:*)",
+      "Bash(swift:*)"
+    ]
+  }
+}

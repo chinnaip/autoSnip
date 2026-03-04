@@ -456,6 +456,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                     continue
                 }
             } else {
+                // Secondary display: ALSO require device to be near AirDrop header
+                // (prevents false-positive clicks on background terminal/editor text)
+                // Bug 2 (OCR misread "pchinnai2" as "pchinnal2") is resolved as a
+                // side-effect — the misread terminal text won't pass this proximity check.
+                guard let adb = airDropBox else {
+                    dbg("ocr_display\(displayID): no AirDrop header on secondary display")
+                    continue
+                }
+                let xDiff = abs(db.midX - adb.midX)
+                let yBelow = adb.midY - db.midY
+                dbg("ocr_secondary airdrop=(\(adb.midX),\(adb.midY)) device=(\(db.midX),\(db.midY)) xDiff=\(xDiff) yBelow=\(yBelow)")
+                guard xDiff < 0.35 && yBelow > 0.02 && yBelow < 0.6 else {
+                    dbg("ocr_secondary: '\(deviceText)' not near AirDrop header, skipping")
+                    continue
+                }
                 dbg("ocr_secondary: found '\(deviceText)' at (\(db.midX),\(db.midY))")
             }
 
@@ -500,7 +515,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     }
 
     private func tryCGClick(deviceName: String) -> Bool {
-        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        // Omit .optionOnScreenOnly so the share sheet is found on secondary/off-screen displays
+        let opts: CGWindowListOption = [.excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else { return false }
 
         for w in list {
@@ -531,7 +547,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
             }
         }
         // Fallback: search CGWindowList for owner name
-        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        // Omit .optionOnScreenOnly so the share sheet PID is found on any display
+        let opts: CGWindowListOption = [.excludeDesktopElements]
         if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] {
             for w in list {
                 let owner = w["kCGWindowOwnerName"] as? String ?? ""

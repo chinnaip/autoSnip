@@ -483,30 +483,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
 
             let quartzX = globalX, quartzY = iconY  // MODIFIED to click icon instead of text
 
-            // Enable pass-through on our NSWindow shell so the click falls through
-            // to AirDrop.send's underlying rendering window (pid=68977)
-            let hadWindow = DispatchQueue.main.sync { () -> Bool in
-                guard let shareWin = NSApp.windows.first(where: { $0.title == "AirDrop" }) else {
-                    dbg("nswindow_not_found: \(NSApp.windows.map { $0.title })")
-                    return false
-                }
-                shareWin.ignoresMouseEvents = true
-                dbg("shell_passthrough: frame=\(shareWin.frame)")
-                return true
+            // Enable pass-through on ALL autoSnip windows so no untitled panel
+            // absorbs the click — only the external AirDrop.send window receives it
+            let passthroughWins = DispatchQueue.main.sync { () -> [NSWindow] in
+                let wins = NSApp.windows.filter { !$0.ignoresMouseEvents }
+                wins.forEach { $0.ignoresMouseEvents = true }
+                dbg("shell_passthrough_enabled count=\(wins.count) titles=\(wins.map { $0.title })")
+                return wins
             }
 
             // Click at the OCR-located device position; routes to AirDrop.send window underneath
             cgClick(x: quartzX, y: quartzY)
 
-            // Restore the shell window after a brief moment
+            // Restore all windows after a brief moment
             Thread.sleep(forTimeInterval: 0.3)
             DispatchQueue.main.sync {
-                NSApp.windows.first(where: { $0.title == "AirDrop" })?.ignoresMouseEvents = false
-                dbg("shell_passthrough_restored")
+                passthroughWins.forEach { $0.ignoresMouseEvents = false }
+                dbg("shell_passthrough_restored count=\(passthroughWins.count)")
             }
-            if hadWindow { return true }
-
-            cgClick(x: globalX, y: iconY)
             return true
         }
 
@@ -534,17 +528,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
             let clickY = y + height / 2
             dbg("cg_click owner=\(owner) at (\(clickX), \(clickY)) win=\(width)x\(height)")
 
-            // Enable pass-through on autoSnip's shell NSPanel so the click reaches
-            // the real AirDrop.send window underneath (mirrors clickDeviceByOCR pattern)
-            DispatchQueue.main.sync {
-                NSApp.windows.first(where: { $0.title == "AirDrop" })?.ignoresMouseEvents = true
-                dbg("cg_shell_passthrough_enabled")
+            // Enable pass-through on ALL autoSnip windows so no untitled panel
+            // absorbs the click — only the external AirDrop.send window receives it
+            let passthroughWins = DispatchQueue.main.sync { () -> [NSWindow] in
+                let wins = NSApp.windows.filter { !$0.ignoresMouseEvents }
+                wins.forEach { $0.ignoresMouseEvents = true }
+                dbg("cg_shell_passthrough_enabled count=\(wins.count)")
+                return wins
             }
             cgClick(x: clickX, y: clickY)
             Thread.sleep(forTimeInterval: 0.3)
             DispatchQueue.main.sync {
-                NSApp.windows.first(where: { $0.title == "AirDrop" })?.ignoresMouseEvents = false
-                dbg("cg_shell_passthrough_restored")
+                passthroughWins.forEach { $0.ignoresMouseEvents = false }
+                dbg("cg_shell_passthrough_restored count=\(passthroughWins.count)")
             }
             return true
         }

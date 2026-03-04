@@ -42,10 +42,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     private var anchorWindow: NSWindow?
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
+    private var isSharing = false  // guards against concurrent AirDrop sessions (#8)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
         setupCarbonHotkey()
+        checkAccessibilityPermission()
+    }
+
+    private func checkAccessibilityPermission() {
+        // Issue #7: without Accessibility, AX click and CGEvent injection fail silently.
+        // Log the current state and show an alert if not granted so users know immediately.
+        let trusted = AXIsProcessTrustedWithOptions(nil)
+        dbg("ax_trusted: \(trusted)")
+        guard !trusted else { return }
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = "Accessibility Permission Required"
+            alert.informativeText = "autoSnip needs Accessibility access to auto-click the AirDrop device. Please enable it in System Settings → Privacy & Security → Accessibility, then relaunch autoSnip."
+            alert.addButton(withTitle: "Open System Settings")
+            alert.addButton(withTitle: "Later")
+            if alert.runModal() == .alertFirstButtonReturn {
+                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+            }
+        }
     }
 
     // MARK: Menu Bar
@@ -205,8 +225,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     // MARK: AirDrop
 
     private func shareViaAirDrop(fileURL: URL) {
+        // Issue #8: guard against re-entry — a second hotkey press while sharing is active
+        // would open a new sheet, stack windows, and confuse the retry click loop.
+        guard !isSharing else {
+            dbg("airdrop_skipped: already sharing")
+            return
+        }
+        isSharing = true
         guard let service = NSSharingService(named: .sendViaAirDrop) else {
             dbg("airdrop_service_unavailable")
+            isSharing = false
             return
         }
         dbg("airdrop_start \(fileURL.lastPathComponent)")
@@ -259,10 +287,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
 
     func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: Error) {
         dbg("airdrop_FAILED: \(error.localizedDescription) \((error as NSError).code)")
+        isSharing = false
     }
 
     func sharingServiceDidStopSharing(_ sharingService: NSSharingService) {
         dbg("airdrop_did_stop_sharing")
+        isSharing = false
     }
 
     private func clickAirDropDevice() {

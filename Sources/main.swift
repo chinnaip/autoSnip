@@ -519,9 +519,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         let opts: CGWindowListOption = [.excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else { return false }
 
+        let myPID = Int32(ProcessInfo.processInfo.processIdentifier)
         for w in list {
             let owner = w["kCGWindowOwnerName"] as? String ?? ""
             guard owner.contains("ShareSheet") || owner.contains("AirDrop") else { continue }
+            // Skip autoSnip's own shell NSPanel — target only the external AirDrop.send process
+            guard let pid = w["kCGWindowOwnerPID"] as? Int32, pid != myPID else { continue }
             guard let bounds = w["kCGWindowBounds"] as? [String: CGFloat],
                   let x = bounds["X"], let y = bounds["Y"],
                   let width = bounds["Width"], let height = bounds["Height"],
@@ -530,7 +533,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
             let clickX = x + width / 2
             let clickY = y + height / 2
             dbg("cg_click owner=\(owner) at (\(clickX), \(clickY)) win=\(width)x\(height)")
+
+            // Enable pass-through on autoSnip's shell NSPanel so the click reaches
+            // the real AirDrop.send window underneath (mirrors clickDeviceByOCR pattern)
+            DispatchQueue.main.sync {
+                NSApp.windows.first(where: { $0.title == "AirDrop" })?.ignoresMouseEvents = true
+                dbg("cg_shell_passthrough_enabled")
+            }
             cgClick(x: clickX, y: clickY)
+            Thread.sleep(forTimeInterval: 0.3)
+            DispatchQueue.main.sync {
+                NSApp.windows.first(where: { $0.title == "AirDrop" })?.ignoresMouseEvents = false
+                dbg("cg_shell_passthrough_restored")
+            }
             return true
         }
 

@@ -474,14 +474,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                 dbg("ocr_secondary: found '\(deviceText)' at (\(db.midX),\(db.midY))")
             }
 
-            // Convert to global Quartz screen coords
-            let globalX = bounds.origin.x + db.midX * W / scale
-            let globalY = bounds.origin.y + (1.0 - db.midY) * H / scale
-            let iconY = globalY - 65  // also try the device icon above text label
+            // Convert VN normalised coords to global Quartz screen coords via NSScreen.
+            // CGDisplayBounds origin can mismatch the Quartz coordinate space on non-standard
+            // display arrangements (e.g. secondary above/below primary), causing cursor warp
+            // to land on the wrong display. NSScreen.frame is already in the correct space.
+            guard let screen = NSScreen.screens.first(where: {
+                let sid = $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+                return sid == displayID
+            }) else { continue }
+            let sf = screen.frame  // AppKit coords (origin = bottom-left of main screen)
+            let mainH = NSScreen.screens[0].frame.maxY
+            let quartzOriginX = sf.origin.x
+            let quartzOriginY = mainH - sf.origin.y - sf.height  // flip to Quartz top-left origin
+            // VN normalised: (0,0)=bottom-left, (1,1)=top-right
+            let globalX = quartzOriginX + db.midX * sf.width
+            let globalY = quartzOriginY + (1.0 - db.midY) * sf.height
+            let iconY = globalY - 30  // 30pt above text label targets device icon (was 65, too high)
 
-            dbg("ocr_clicking '\(deviceText)' text=(\(globalX),\(globalY)) icon=(\(globalX),\(iconY))")
+            dbg("ocr_clicking '\(deviceText)' text=(\(globalX),\(globalY)) icon=(\(globalX),\(iconY)) screen=\(sf)")
 
-            let quartzX = globalX, quartzY = iconY  // MODIFIED to click icon instead of text
+            let quartzX = globalX, quartzY = iconY
 
             // Enable pass-through on ALL autoSnip windows so no untitled panel
             // absorbs the click — only the external AirDrop.send window receives it

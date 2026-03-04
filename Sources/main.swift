@@ -509,43 +509,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     }
 
     private func tryCGClick(deviceName: String) -> Bool {
-        // Omit .optionOnScreenOnly so the share sheet is found on secondary/off-screen displays
+        // Issue #4: tryCGClick clicked window center (missing the device button) and returned
+        // true immediately, preventing clickDeviceByOCR (which has retries + exact OCR
+        // positioning) from running. Now returns false always so clickDeviceByOCR takes over.
+        // Window discovery is kept as a diagnostic log only.
         let opts: CGWindowListOption = [.excludeDesktopElements]
-        guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else { return false }
-
-        let myPID = Int32(ProcessInfo.processInfo.processIdentifier)
-        for w in list {
-            let owner = w["kCGWindowOwnerName"] as? String ?? ""
-            guard owner.contains("ShareSheet") || owner.contains("AirDrop") else { continue }
-            // Skip autoSnip's own shell NSPanel — target only the external AirDrop.send process
-            guard let pid = w["kCGWindowOwnerPID"] as? Int32, pid != myPID else { continue }
-            guard let bounds = w["kCGWindowBounds"] as? [String: CGFloat],
-                  let x = bounds["X"], let y = bounds["Y"],
-                  let width = bounds["Width"], let height = bounds["Height"],
-                  width > 50 && height > 50 else { continue }
-
-            let clickX = x + width / 2
-            let clickY = y + height / 2
-            dbg("cg_click owner=\(owner) at (\(clickX), \(clickY)) win=\(width)x\(height)")
-
-            // Enable pass-through on ALL autoSnip windows so no untitled panel
-            // absorbs the click — only the external AirDrop.send window receives it
-            let passthroughWins = DispatchQueue.main.sync { () -> [NSWindow] in
-                let wins = NSApp.windows.filter { !$0.ignoresMouseEvents }
-                wins.forEach { $0.ignoresMouseEvents = true }
-                dbg("cg_shell_passthrough_enabled count=\(wins.count)")
-                return wins
+        if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] {
+            let myPID = Int32(ProcessInfo.processInfo.processIdentifier)
+            for w in list {
+                let owner = w["kCGWindowOwnerName"] as? String ?? ""
+                guard owner.contains("ShareSheet") || owner.contains("AirDrop") else { continue }
+                guard let pid = w["kCGWindowOwnerPID"] as? Int32, pid != myPID else { continue }
+                guard let bounds = w["kCGWindowBounds"] as? [String: CGFloat],
+                      let x = bounds["X"], let y = bounds["Y"],
+                      let width = bounds["Width"], let height = bounds["Height"],
+                      width > 50 && height > 50 else { continue }
+                dbg("cg_found owner=\(owner) pid=\(pid) at (\(x),\(y)) win=\(width)x\(height) — deferring to OCR")
             }
-            cgClick(x: clickX, y: clickY)
-            Thread.sleep(forTimeInterval: 0.3)
-            DispatchQueue.main.sync {
-                passthroughWins.forEach { $0.ignoresMouseEvents = false }
-                dbg("cg_shell_passthrough_restored count=\(passthroughWins.count)")
-            }
-            return true
         }
-
-        dbg("cg_no_sharesheet_window_found")
+        // Always return false: let clickDeviceByOCR handle the actual click with
+        // retries and OCR-precise device-button positioning
         return false
     }
 

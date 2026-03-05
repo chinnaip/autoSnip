@@ -480,7 +480,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                !str.isEmpty {
                 let pressResult = AXUIElementPerformAction(element, kAXPressAction as CFString)
                 dbg("ax_clicked: \(str) pressResult=\(pressResult.rawValue)")
-                return false
+                return pressResult == .success
             }
         }
         var childrenRef: AnyObject?

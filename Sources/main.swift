@@ -43,6 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
     private var isSharing = false  // guards against concurrent AirDrop sessions (#8)
+    // Issue #10: track when perform() was called so tryAXClick can prefer the freshest
+    // AirDrop extension process (spawned by our session) over any orphaned one.
+    private var airDropPerformTime: Date = .distantPast
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--once") {
@@ -65,7 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         DispatchQueue.main.async {
             let alert = NSAlert()
             alert.messageText = "Accessibility Permission Required"
-            alert.informativeText = "autoSnip needs Accessibility access to auto-click the AirDrop device. Please enable it in System Settings → Privacy & Security → Accessibility, then relaunch autoSnip."
+            alert.informativeText = "autoSnip needs Accessibility access to auto-click the AirDrop device. Please enable it in System Settings \u2192 Privacy & Security \u2192 Accessibility, then relaunch autoSnip."
             alert.addButton(withTitle: "Open System Settings")
             alert.addButton(withTitle: "Later")
             if alert.runModal() == .alertFirstButtonReturn {
@@ -286,7 +289,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         NSApp.activate(ignoringOtherApps: true)
         dbg("airdrop_activation_done")
 
+        // Issue #10: kill any orphaned AirDrop.send extension processes left over from
+        // previous sessions (e.g. stale Finder AirDrop). They intercept the AX button
+        // press or the XPC connection, preventing the file from being sent.
+        killOrphanedAirDropExtensions()
+
         service.delegate = self
+        airDropPerformTime = Date()
         service.perform(withItems: [fileURL])
         dbg("airdrop_perform_called")
 
@@ -395,20 +404,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     }
 
     private func tryAXClick(deviceName: String) -> Bool {
-        // Collect all PIDs to search: own process first, then any share/airdrop-related process
-        var pids: [pid_t] = [pid_t(ProcessInfo.processInfo.processIdentifier)]
-        if let ext = shareSheetPID() { pids.append(ext) }
-        // Also scan all running apps for share-related processes
+        // Issue #10: collect share/airdrop-related PIDs, but put the freshest AirDrop
+        // extension (highest PID, spawned after our perform() call) at the front so the
+        // AX press lands in the correct extension process rather than an orphaned one.
+        var otherSharePIDs: [pid_t] = []
+        var airDropExtPIDs: [pid_t] = []
         for app in NSWorkspace.shared.runningApplications {
             let name = (app.localizedName ?? "").lowercased()
             let bundle = (app.bundleIdentifier ?? "").lowercased()
             let pid = app.processIdentifier
-            if !pids.contains(pid) &&
-               (name.contains("share") || name.contains("air") || bundle.contains("share") || bundle.contains("air")) {
-                dbg("ax_scan_app: '\(app.localizedName ?? "?")' pid=\(pid)")
-                pids.append(pid)
+            if bundle == "com.apple.share.airdrop.send" ||
+               (name.contains("airdrop") && bundle.contains("share")) {
+                airDropExtPIDs.append(pid)
+            } else if name.contains("share") || name.contains("air") ||
+                      bundle.contains("share") || bundle.contains("air") {
+                if !otherSharePIDs.contains(pid) { otherSharePIDs.append(pid) }
             }
         }
+        // Sort AirDrop extension PIDs descending: highest PID = most recently spawned = ours
+        airDropExtPIDs.sort(by: >)
+        for pid in airDropExtPIDs { dbg("ax_airdrop_ext_pid=\(pid) (freshest first)") }
+
+        // Search AirDrop extension PIDs first (freshest), then our own process, then others
+        let ownPID = pid_t(ProcessInfo.processInfo.processIdentifier)
+        var pids: [pid_t] = airDropExtPIDs
+        if !pids.contains(ownPID) { pids.append(ownPID) }
+        for p in otherSharePIDs where !pids.contains(p) { pids.append(p) }
+        if let ext = shareSheetPID(), !pids.contains(ext) { pids.append(ext) }
+
         for pid in pids {
             let appElem = AXUIElementCreateApplication(pid)
             var windowsRef: AnyObject?
@@ -592,12 +615,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                       let x = bounds["X"], let y = bounds["Y"],
                       let width = bounds["Width"], let height = bounds["Height"],
                       width > 50 && height > 50 else { continue }
-                dbg("cg_found owner=\(owner) pid=\(pid) at (\(x),\(y)) win=\(width)x\(height) — deferring to OCR")
+                dbg("cg_found owner=\(owner) pid=\(pid) at (\(x),\(y)) win=\(width)x\(height) \u2014 deferring to OCR")
             }
         }
         // Always return false: let clickDeviceByOCR handle the actual click with
         // retries and OCR-precise device-button positioning
         return false
+    }
+
+    // Issue #10: terminate stale com.apple.share.AirDrop.send extension processes
+    // spawned by previous sessions (Finder, etc.) before we call perform(). This
+    // prevents them from intercepting the AX click or XPC connection for our session.
+    private func killOrphanedAirDropExtensions() {
+        let myPID = Int32(ProcessInfo.processInfo.processIdentifier)
+        for app in NSWorkspace.shared.runningApplications {
+            let bundle = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            guard bundle == "com.apple.share.AirDrop.send" ||
+                  (name.lowercased().contains("airdrop") && bundle.lowercased().contains("share")) else { continue }
+            guard app.processIdentifier != myPID else { continue }
+            dbg("killing_orphaned_airdrop pid=\(app.processIdentifier) bundle=\(bundle)")
+            app.terminate()
+        }
+        // Brief pause so macOS registers the terminations before we spawn our own extension
+        Thread.sleep(forTimeInterval: 0.3)
     }
 
     private func shareSheetPID() -> pid_t? {

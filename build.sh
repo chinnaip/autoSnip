@@ -23,3 +23,19 @@ codesign --deep --force --sign "autoSnip Developer" \
 
 echo "Build complete: autoSnip.app"
 echo "Run with: open autoSnip.app"
+
+# Build one-shot snip command (no menu bar, no hotkey — just run: ./snip)
+swiftc \
+    -framework Cocoa \
+    -framework Vision \
+    -target arm64-apple-macos14.0 \
+    -swift-version 5 \
+    Sources/snip.swift -o snip
+
+codesign --force --sign "autoSnip Developer" \
+    --entitlements autoSnip.entitlements \
+    --options runtime \
+    snip
+
+echo "Build complete: snip"
+echo "Run with: ./snip [deviceName]"

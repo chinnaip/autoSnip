@@ -248,9 +248,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         dbg("once_captured: \(file)")
         isSharing = false  // ensure clean state
         shareViaAirDrop(fileURL: URL(fileURLWithPath: file))
-        // Exit after 30s hard timeout
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
-            dbg("once_timeout"); exit(0)
+        // Exit after 12s — screenshot transfers complete in ~5s; sharingServiceDidStopSharing
+        // does not fire reliably in --once mode so this timeout is the exit path.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) {
+            dbg("once_done"); exit(0)
         }
     }
 

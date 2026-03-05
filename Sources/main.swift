@@ -50,7 +50,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--once") {
             // One-shot mode: capture display 1, send via AirDrop, exit. No menu bar or hotkey.
-            checkAccessibilityPermission()
+            // Skip the alert in --once mode — just log and proceed silently.
+            let trusted = AXIsProcessTrustedWithOptions(nil)
+            dbg("ax_trusted: \(trusted)")
             DispatchQueue.main.async { self.captureAndShareOnce() }
         } else {
             setupMenuBar()
@@ -68,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         DispatchQueue.main.async {
             let alert = NSAlert()
             alert.messageText = "Accessibility Permission Required"
-            alert.informativeText = "autoSnip needs Accessibility access to auto-click the AirDrop device. Please enable it in System Settings \u2192 Privacy & Security \u2192 Accessibility, then relaunch autoSnip."
+            alert.informativeText = "autoSnip needs Accessibility access to auto-click the AirDrop device. Please enable it in System Settings → Privacy & Security → Accessibility, then relaunch autoSnip."
             alert.addButton(withTitle: "Open System Settings")
             alert.addButton(withTitle: "Later")
             if alert.runModal() == .alertFirstButtonReturn {
@@ -289,10 +291,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         NSApp.activate(ignoringOtherApps: true)
         dbg("airdrop_activation_done")
 
-        // Issue #10: kill any orphaned AirDrop.send extension processes left over from
-        // previous sessions (e.g. stale Finder AirDrop). They intercept the AX button
-        // press or the XPC connection, preventing the file from being sent.
-        killOrphanedAirDropExtensions()
+        // Issue #10: killOrphanedAirDropExtensions() removed — it was terminating
+        // AirDrop (Finder), a system daemon needed for XPC routing, breaking all sends.
+        // See Issue #11. Awaiting a safe fix using launchDate comparison.
 
         service.delegate = self
         airDropPerformTime = Date()
@@ -460,9 +461,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                let str = val as? String,
                str.localizedCaseInsensitiveContains(deviceName) || deviceName.localizedCaseInsensitiveContains(str),
                !str.isEmpty {
-                AXUIElementPerformAction(element, kAXPressAction as CFString)
-                dbg("ax_clicked: \(str)")
-                return true
+                let pressResult = AXUIElementPerformAction(element, kAXPressAction as CFString)
+                dbg("ax_clicked: \(str) pressResult=\(pressResult.rawValue)")
+                // Return false so clickDeviceByOCR also fires a real CGEvent click as backup
+                return false
             }
         }
         var childrenRef: AnyObject?
@@ -615,7 +617,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                       let x = bounds["X"], let y = bounds["Y"],
                       let width = bounds["Width"], let height = bounds["Height"],
                       width > 50 && height > 50 else { continue }
-                dbg("cg_found owner=\(owner) pid=\(pid) at (\(x),\(y)) win=\(width)x\(height) \u2014 deferring to OCR")
+                dbg("cg_found owner=\(owner) pid=\(pid) at (\(x),\(y)) win=\(width)x\(height) — deferring to OCR")
             }
         }
         // Always return false: let clickDeviceByOCR handle the actual click with

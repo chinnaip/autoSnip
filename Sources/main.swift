@@ -50,7 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--once") {
             // One-shot mode: capture display 1, send via AirDrop, exit. No menu bar or hotkey.
-            // Skip the alert in --once mode — just log and proceed silently.
+            // Skip the alert in --once mode -- just log and proceed silently.
             let trusted = AXIsProcessTrustedWithOptions(nil)
             dbg("ax_trusted: \(trusted)")
             DispatchQueue.main.async { self.captureAndShareOnce() }
@@ -70,13 +70,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         DispatchQueue.main.async {
             let alert = NSAlert()
             alert.messageText = "Accessibility Permission Required"
-            alert.informativeText = "autoSnip needs Accessibility access to auto-click the AirDrop device. Please enable it in System Settings → Privacy & Security → Accessibility, then relaunch autoSnip."
+            alert.informativeText = "autoSnip needs Accessibility access to auto-click the AirDrop device. Please enable it in System Settings -> Privacy & Security -> Accessibility, then relaunch autoSnip."
             alert.addButton(withTitle: "Open System Settings")
             alert.addButton(withTitle: "Later")
-            if alert.runModal() == .alertFirstButtonReturn {
-                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+            // Issue #13: anchor alert on display 2 (secondary screen, where terminal lives)
+            let anchorWin = Self.makeAlertAnchorWindow()
+            anchorWin.makeKeyAndOrderFront(nil)
+            alert.beginSheetModal(for: anchorWin) { response in
+                anchorWin.orderOut(nil)
+                if response == .alertFirstButtonReturn {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+                }
             }
         }
+    }
+
+    // Issue #13: create a 1x1 invisible anchor window on display 2 so alerts/sheets appear
+    // on the secondary screen (where the terminal lives) rather than display 1.
+    private static func makeAlertAnchorWindow() -> NSWindow {
+        let screens = NSScreen.screens
+        let target = screens.count > 1 ? screens[1] : (NSScreen.main ?? screens[0])
+        let rect = NSRect(x: target.frame.midX - 1, y: target.frame.midY - 1, width: 1, height: 1)
+        let win = NSWindow(contentRect: rect, styleMask: [], backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
+        win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        return win
     }
 
     // MARK: Menu Bar
@@ -128,12 +146,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         field.placeholderString = "e.g. John's iPhone"
         alert.accessoryView = field
 
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty {
-                UserDefaults.standard.set(name, forKey: "airDropDeviceName")
-                refreshMenuBar()
+        // Issue #13: anchor alert on display 2 so it appears on the secondary screen
+        let anchorWin = Self.makeAlertAnchorWindow()
+        anchorWin.makeKeyAndOrderFront(nil)
+        alert.beginSheetModal(for: anchorWin) { [weak self] response in
+            anchorWin.orderOut(nil)
+            if response == .alertFirstButtonReturn {
+                let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty {
+                    UserDefaults.standard.set(name, forKey: "airDropDeviceName")
+                    self?.refreshMenuBar()
+                }
             }
         }
     }
@@ -283,7 +306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         win.isReleasedWhenClosed = false
         win.isFloatingPanel = true
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        // Do NOT order front — just hold a reference for the delegate.
+        // Do NOT order front -- just hold a reference for the delegate.
         // Ordering it front blocks clicks intended for ShareSheetUI.
         anchorWindow = win
 
@@ -291,7 +314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         NSApp.activate(ignoringOtherApps: true)
         dbg("airdrop_activation_done")
 
-        // Issue #10: killOrphanedAirDropExtensions() removed — it was terminating
+        // Issue #10: killOrphanedAirDropExtensions() removed -- it was terminating
         // AirDrop (Finder), a system daemon needed for XPC routing, breaking all sends.
         // See Issue #11. Awaiting a safe fix using launchDate comparison.
 
@@ -405,9 +428,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     }
 
     private func tryAXClick(deviceName: String) -> Bool {
-        // Issue #10: collect share/airdrop-related PIDs, but put the freshest AirDrop
-        // extension (highest PID, spawned after our perform() call) at the front so the
-        // AX press lands in the correct extension process rather than an orphaned one.
         var otherSharePIDs: [pid_t] = []
         var airDropExtPIDs: [pid_t] = []
         for app in NSWorkspace.shared.runningApplications {
@@ -422,11 +442,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                 if !otherSharePIDs.contains(pid) { otherSharePIDs.append(pid) }
             }
         }
-        // Sort AirDrop extension PIDs descending: highest PID = most recently spawned = ours
         airDropExtPIDs.sort(by: >)
         for pid in airDropExtPIDs { dbg("ax_airdrop_ext_pid=\(pid) (freshest first)") }
 
-        // Search AirDrop extension PIDs first (freshest), then our own process, then others
         let ownPID = pid_t(ProcessInfo.processInfo.processIdentifier)
         var pids: [pid_t] = airDropExtPIDs
         if !pids.contains(ownPID) { pids.append(ownPID) }
@@ -454,7 +472,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
 
     @discardableResult
     private func axSearch(element: AXUIElement, deviceName: String) -> Bool {
-        // Check label/title/description
         for attr in [kAXTitleAttribute, kAXDescriptionAttribute, kAXLabelValueAttribute, kAXValueAttribute] {
             var val: AnyObject?
             if AXUIElementCopyAttributeValue(element, attr as CFString, &val) == .success,
@@ -463,7 +480,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                !str.isEmpty {
                 let pressResult = AXUIElementPerformAction(element, kAXPressAction as CFString)
                 dbg("ax_clicked: \(str) pressResult=\(pressResult.rawValue)")
-                // Return false so clickDeviceByOCR also fires a real CGEvent click as backup
                 return false
             }
         }
@@ -478,7 +494,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     }
 
     private func clickDeviceByOCR(deviceName: String) -> Bool {
-        // Scan ALL connected displays — share sheet may be on secondary screen
         var displayCount: UInt32 = 0
         CGGetActiveDisplayList(0, nil, &displayCount)
         var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
@@ -495,7 +510,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
             var deviceBox: CGRect? = nil
             var deviceText = ""
 
-            // Save screenshot of this display for debugging
             let repDbg = NSBitmapImageRep(cgImage: img)
             if let png = repDbg.representation(using: .png, properties: [:]) {
                 try? png.write(to: URL(fileURLWithPath: "/tmp/ocr_display\(displayID).png"))
@@ -513,7 +527,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                     if ocrMatches(s, deviceName) { deviceBox = o.boundingBox; deviceText = s }
                 }
             }
-            // Use accurate recognition on secondary display (device name may be small)
             req.recognitionLevel = isMainDisplay ? .fast : .accurate
             try? VNImageRequestHandler(cgImage: img, options: [:]).perform([req])
 
@@ -523,8 +536,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
             }
 
             if isMainDisplay {
-                // On main display: require "pchinnai2" to be near "AirDrop" header
-                // (to avoid false matches from VS Code in background)
                 guard let adb = airDropBox else {
                     dbg("ocr_display\(displayID): no AirDrop header on main display")
                     continue
@@ -537,10 +548,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                     continue
                 }
             } else {
-                // Secondary display: ALSO require device to be near AirDrop header
-                // (prevents false-positive clicks on background terminal/editor text)
-                // Bug 2 (OCR misread "pchinnai2" as "pchinnal2") is resolved as a
-                // side-effect — the misread terminal text won't pass this proximity check.
                 guard let adb = airDropBox else {
                     dbg("ocr_display\(displayID): no AirDrop header on secondary display")
                     continue
@@ -555,29 +562,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                 dbg("ocr_secondary: found '\(deviceText)' at (\(db.midX),\(db.midY))")
             }
 
-            // Convert VN normalised coords to global Quartz screen coords via NSScreen.
-            // CGDisplayBounds origin can mismatch the Quartz coordinate space on non-standard
-            // display arrangements (e.g. secondary above/below primary), causing cursor warp
-            // to land on the wrong display. NSScreen.frame is already in the correct space.
             guard let screen = NSScreen.screens.first(where: {
                 let sid = $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
                 return sid == displayID
             }) else { continue }
-            let sf = screen.frame  // AppKit coords (origin = bottom-left of main screen)
+            let sf = screen.frame
             let mainH = NSScreen.screens[0].frame.maxY
             let quartzOriginX = sf.origin.x
-            let quartzOriginY = mainH - sf.origin.y - sf.height  // flip to Quartz top-left origin
-            // VN normalised: (0,0)=bottom-left, (1,1)=top-right
+            let quartzOriginY = mainH - sf.origin.y - sf.height
             let globalX = quartzOriginX + db.midX * sf.width
             let globalY = quartzOriginY + (1.0 - db.midY) * sf.height
-            let iconY = globalY - 30  // 30pt above text label targets device icon (was 65, too high)
+            let iconY = globalY - 30
 
             dbg("ocr_clicking '\(deviceText)' text=(\(globalX),\(globalY)) icon=(\(globalX),\(iconY)) screen=\(sf)")
 
             let quartzX = globalX, quartzY = iconY
 
-            // Enable pass-through on ALL autoSnip windows so no untitled panel
-            // absorbs the click — only the external AirDrop.send window receives it
             let passthroughWins = DispatchQueue.main.sync { () -> [NSWindow] in
                 let wins = NSApp.windows.filter { !$0.ignoresMouseEvents }
                 wins.forEach { $0.ignoresMouseEvents = true }
@@ -585,10 +585,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                 return wins
             }
 
-            // Click at the OCR-located device position; routes to AirDrop.send window underneath
             cgClick(x: quartzX, y: quartzY)
 
-            // Restore all windows after a brief moment
             Thread.sleep(forTimeInterval: 0.3)
             DispatchQueue.main.sync {
                 passthroughWins.forEach { $0.ignoresMouseEvents = false }
@@ -602,10 +600,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     }
 
     private func tryCGClick(deviceName: String) -> Bool {
-        // Issue #4: tryCGClick clicked window center (missing the device button) and returned
-        // true immediately, preventing clickDeviceByOCR (which has retries + exact OCR
-        // positioning) from running. Now returns false always so clickDeviceByOCR takes over.
-        // Window discovery is kept as a diagnostic log only.
         let opts: CGWindowListOption = [.excludeDesktopElements]
         if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] {
             let myPID = Int32(ProcessInfo.processInfo.processIdentifier)
@@ -617,17 +611,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                       let x = bounds["X"], let y = bounds["Y"],
                       let width = bounds["Width"], let height = bounds["Height"],
                       width > 50 && height > 50 else { continue }
-                dbg("cg_found owner=\(owner) pid=\(pid) at (\(x),\(y)) win=\(width)x\(height) — deferring to OCR")
+                dbg("cg_found owner=\(owner) pid=\(pid) at (\(x),\(y)) win=\(width)x\(height) -- deferring to OCR")
             }
         }
-        // Always return false: let clickDeviceByOCR handle the actual click with
-        // retries and OCR-precise device-button positioning
         return false
     }
 
-    // Issue #10: terminate stale com.apple.share.AirDrop.send extension processes
-    // spawned by previous sessions (Finder, etc.) before we call perform(). This
-    // prevents them from intercepting the AX click or XPC connection for our session.
     private func killOrphanedAirDropExtensions() {
         let myPID = Int32(ProcessInfo.processInfo.processIdentifier)
         for app in NSWorkspace.shared.runningApplications {
@@ -639,20 +628,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
             dbg("killing_orphaned_airdrop pid=\(app.processIdentifier) bundle=\(bundle)")
             app.terminate()
         }
-        // Brief pause so macOS registers the terminations before we spawn our own extension
         Thread.sleep(forTimeInterval: 0.3)
     }
 
     private func shareSheetPID() -> pid_t? {
-        // Try NSWorkspace first
         for app in NSWorkspace.shared.runningApplications {
             let name = app.localizedName ?? ""
             if name.contains("ShareSheet") || name.contains("Share Sheet") {
                 return app.processIdentifier
             }
         }
-        // Fallback: search CGWindowList for owner name
-        // Omit .optionOnScreenOnly so the share sheet PID is found on any display
         let opts: CGWindowListOption = [.excludeDesktopElements]
         if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] {
             for w in list {
@@ -669,14 +654,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         let point = CGPoint(x: x, y: y)
         let src = CGEventSource(stateID: .combinedSessionState)
 
-        // Warp cursor and send mouseMoved to trigger hover/focus state
         CGWarpMouseCursorPosition(point)
-        Thread.sleep(forTimeInterval: 0.3)  // longer hover so ShareSheetUI can register hover
+        Thread.sleep(forTimeInterval: 0.3)
         let move = CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)
         move?.post(tap: .cghidEventTap)
         Thread.sleep(forTimeInterval: 0.3)
 
-        // Try both tap levels: HID (hardware-like) and session (window-server routed)
         for tapPoint: CGEventTapLocation in [.cghidEventTap, .cgSessionEventTap] {
             let down = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
             let up   = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp,   mouseCursorPosition: point, mouseButton: .left)
@@ -687,7 +670,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
             dbg("cgClick_tap=\(tapPoint == .cghidEventTap ? "HID" : "session") at (\(x),\(y))")
         }
 
-        // Log what AX element is at this position and attempt kAXPressAction
         let sysElem = AXUIElementCreateSystemWide()
         var axElem: AXUIElement?
         if AXUIElementCopyElementAtPosition(sysElem, Float(x), Float(y), &axElem) == .success,
@@ -702,6 +684,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
             dbg("ax_press_result: \(pressResult.rawValue)")
         } else {
             dbg("ax_no_element_at (\(x),\(y))")
+        }
+
+        // Issue #12: CGEvent and kAXPressAction both succeed but the AirDrop share extension
+        // ignores synthesized events from another process (sandboxed private XPC routing).
+        // AppleScript/System Events uses a different injection path the extension does respond to.
+        appleScriptClick(x: x, y: y)
+    }
+
+    // Issue #12: use System Events to click at the given Quartz screen coordinate.
+    // This bypasses CGEvent's sandbox restrictions and reaches the AirDrop share extension.
+    private func appleScriptClick(x: CGFloat, y: CGFloat) {
+        // System Events click uses screen coords with (0,0) at top-left of primary display,
+        // which matches Quartz coordinates -- no conversion needed.
+        let script = "tell application \"System Events\" to click at {\(Int(x)), \(Int(y))}"
+        dbg("applescript_click at (\(Int(x)), \(Int(y)))")
+        var errorDict: NSDictionary?
+        let appleScript = NSAppleScript(source: script)
+        let result = appleScript?.executeAndReturnError(&errorDict)
+        if let err = errorDict {
+            dbg("applescript_error: \(err)")
+        } else {
+            dbg("applescript_click_ok descriptor=\(result?.stringValue ?? "nil")")
         }
     }
 }

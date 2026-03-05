@@ -45,9 +45,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     private var isSharing = false  // guards against concurrent AirDrop sessions (#8)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        setupMenuBar()
-        setupCarbonHotkey()
-        checkAccessibilityPermission()
+        if CommandLine.arguments.contains("--once") {
+            // One-shot mode: capture display 1, send via AirDrop, exit. No menu bar or hotkey.
+            checkAccessibilityPermission()
+            DispatchQueue.main.async { self.captureAndShareOnce() }
+        } else {
+            setupMenuBar()
+            setupCarbonHotkey()
+            checkAccessibilityPermission()
+        }
     }
 
     private func checkAccessibilityPermission() {
@@ -203,6 +209,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         }
     }
 
+    // One-shot mode: capture display 1 via screencapture (simpler, no ScreenCaptureKit async),
+    // share via AirDrop, then exit. Used when launched with --once flag from terminal.
+    private func captureAndShareOnce() {
+        let file = "/tmp/autoSnip_\(Int(Date().timeIntervalSince1970)).png"
+        let cap = Process()
+        cap.launchPath = "/usr/sbin/screencapture"
+        cap.arguments = ["-x", "-D", "1", file]
+        cap.launch(); cap.waitUntilExit()
+        dbg("once_captured: \(file)")
+        isSharing = false  // ensure clean state
+        shareViaAirDrop(fileURL: URL(fileURLWithPath: file))
+        // Exit after 30s hard timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+            dbg("once_timeout"); exit(0)
+        }
+    }
+
+
     private func saveAndShare(cgImage: CGImage) {
         let timestamp = Int(Date().timeIntervalSince1970)
         let url = URL(fileURLWithPath: "/tmp/autoSnip_\(timestamp).png")
@@ -288,11 +312,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: Error) {
         dbg("airdrop_FAILED: \(error.localizedDescription) \((error as NSError).code)")
         isSharing = false
+        if CommandLine.arguments.contains("--once") { exit(1) }
     }
 
     func sharingServiceDidStopSharing(_ sharingService: NSSharingService) {
         dbg("airdrop_did_stop_sharing")
         isSharing = false
+        if CommandLine.arguments.contains("--once") { exit(0) }
     }
 
     private func clickAirDropDevice() {

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.yourname.snip</string>
+    <key>CFBundleExecutable</key>
+    <string>snip</string>
+    <key>CFBundleName</key>
+    <string>snip</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Required to click the AirDrop device button automatically.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Required to take screenshots.</string>
+</dict>
+</plist>

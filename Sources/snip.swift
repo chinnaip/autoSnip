@@ -44,16 +44,17 @@ final class SnipDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDeleg
 
     var deviceName: String = ""
     var anchorWindow: NSWindow?
+    var service: NSSharingService?  // must be retained — NSSharingService.delegate is weak
 
     func applicationDidFinishLaunching(_ n: Notification) {
         // No Dock icon, no menu bar
         NSApp.setActivationPolicy(.accessory)
 
-        // Device name: CLI arg > UserDefaults
+        // Read device name from CLI arg, or from autoSnip's UserDefaults domain
         if CommandLine.arguments.count > 1 {
             deviceName = CommandLine.arguments[1]
         } else {
-            deviceName = UserDefaults.standard.string(forKey: "airDropDeviceName") ?? ""
+            deviceName = UserDefaults(suiteName: "com.yourname.autoSnip")?.string(forKey: "airDropDeviceName") ?? ""
         }
         guard !deviceName.isEmpty else {
             log("snip_error: no device name — set via: defaults write com.yourname.autoSnip airDropDeviceName pchinnai2")
@@ -73,6 +74,7 @@ final class SnipDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDeleg
         guard let svc = NSSharingService(named: .sendViaAirDrop) else {
             log("snip_error: AirDrop service unavailable"); exit(1)
         }
+        service = svc  // retain strongly so delegate callbacks fire
         let screens = NSScreen.screens
         let screen = screens.count > 1 ? screens[1] : (NSScreen.main ?? screens[0])
         let frame = screen.visibleFrame
@@ -85,6 +87,7 @@ final class SnipDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDeleg
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         anchorWindow = win
 
+        NSApp.setActivationPolicy(.regular)  // required for NSSharingService delegate callbacks
         NSApp.activate(ignoringOtherApps: true)
         svc.delegate = self
         svc.perform(withItems: [URL(fileURLWithPath: file)])

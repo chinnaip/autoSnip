@@ -48,7 +48,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     private var airDropPerformTime: Date = .distantPast
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if CommandLine.arguments.contains("--once") {
+        if CommandLine.arguments.contains("--scp") {
+            // SCP mode: capture display 1, SCP to configured remote, exit. No AirDrop UI, no focus steal.
+            let trusted = AXIsProcessTrustedWithOptions(nil)
+            dbg("ax_trusted: \(trusted)")
+            DispatchQueue.main.async { self.captureAndSendViaSCP() }
+        } else if CommandLine.arguments.contains("--once") {
             // One-shot mode: capture display 1, send via AirDrop, exit. No menu bar or hotkey.
             // Skip the alert in --once mode -- just log and proceed silently.
             let trusted = AXIsProcessTrustedWithOptions(nil)
@@ -114,9 +119,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
 
         menu.addItem(NSMenuItem.separator())
 
+        let scpTarget = UserDefaults.standard.string(forKey: "scpTarget") ?? "Not set"
+        let scpItem = NSMenuItem(title: "SCP target: \(scpTarget)", action: nil, keyEquivalent: "")
+        scpItem.isEnabled = false
+        menu.addItem(scpItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let setDevice = NSMenuItem(title: "Set AirDrop Device...", action: #selector(setAirDropDevice), keyEquivalent: "")
         setDevice.target = self
         menu.addItem(setDevice)
+
+        let setSCP = NSMenuItem(title: "Set SCP Target...", action: #selector(setSCPTarget), keyEquivalent: "")
+        setSCP.target = self
+        menu.addItem(setSCP)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -130,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         guard let menu = statusItem?.menu else { return }
         let deviceName = UserDefaults.standard.string(forKey: "airDropDeviceName") ?? "Not set"
         menu.item(at: 0)?.title = "AirDrop device: \(deviceName)"
+        menu.item(at: 2)?.title = "SCP target: \(UserDefaults.standard.string(forKey: "scpTarget") ?? "Not set")"
     }
 
     @objc private func setAirDropDevice() {
@@ -155,6 +172,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
                 let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !name.isEmpty {
                     UserDefaults.standard.set(name, forKey: "airDropDeviceName")
+                    self?.refreshMenuBar()
+                }
+            }
+        }
+    }
+
+    @objc private func setSCPTarget() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Set SCP Target"
+        alert.informativeText = "Enter the SCP destination (user@host:path). SSH key auth must be configured."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.stringValue = UserDefaults.standard.string(forKey: "scpTarget") ?? ""
+        field.placeholderString = "e.g. pchinnai@192.168.1.2:~/Desktop/"
+        alert.accessoryView = field
+        let anchorWin = Self.makeAlertAnchorWindow()
+        anchorWin.makeKeyAndOrderFront(nil)
+        alert.beginSheetModal(for: anchorWin) { [weak self] response in
+            anchorWin.orderOut(nil)
+            if response == .alertFirstButtonReturn {
+                let target = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !target.isEmpty {
+                    UserDefaults.standard.set(target, forKey: "scpTarget")
                     self?.refreshMenuBar()
                 }
             }
@@ -195,7 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
             &hotKeyRef
         )
 
-        dbg(status == noErr ? "hotkey_registered OK" : "hotkey_FAILED status=\(status)")
+        dbg(status == noErr ? "hotkey_registered OK" : "hotkey_FAILED status:\(status)")
     }
 
     // MARK: Screen Capture
@@ -252,6 +294,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         // does not fire reliably in --once mode so this timeout is the exit path.
         DispatchQueue.main.asyncAfter(deadline: .now() + 12) {
             dbg("once_done"); exit(0)
+        }
+    }
+
+    // --scp mode: capture display 1, SCP to configured remote, exit. No AirDrop UI, no focus steal.
+    // Falls back to AirDrop --once behaviour if SCP fails. (Issue #15)
+    private func captureAndSendViaSCP() {
+        guard let scpTarget = UserDefaults.standard.string(forKey: "scpTarget"), !scpTarget.isEmpty else {
+            dbg("scp_no_target: falling back to airdrop once mode")
+            captureAndShareOnce()
+            return
+        }
+        let file = "/tmp/autoSnip_\(Int(Date().timeIntervalSince1970)).png"
+        let cap = Process()
+        cap.launchPath = "/usr/sbin/screencapture"
+        cap.arguments = ["-x", "-D", "1", file]
+        cap.launch(); cap.waitUntilExit()
+        dbg("scp_captured: \(file)")
+
+        let scp = Process()
+        scp.launchPath = "/usr/bin/scp"
+        scp.arguments = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", file, scpTarget]
+        scp.launch(); scp.waitUntilExit()
+
+        if scp.terminationStatus == 0 {
+            dbg("scp_success: sent to \(scpTarget)")
+            try? FileManager.default.removeItem(atPath: file)
+            exit(0)
+        } else {
+            dbg("scp_failed status=\(scp.terminationStatus): falling back to airdrop once mode")
+            isSharing = false
+            shareViaAirDrop(fileURL: URL(fileURLWithPath: file))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12) {
+                dbg("once_done"); exit(0)
+            }
         }
     }
 

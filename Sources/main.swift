@@ -243,6 +243,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
     // MARK: Screen Capture
 
     func captureAndShare() {
+        // Issue #16: if scpTarget is configured, use SCP instead of AirDrop to avoid focus steal
+        if let target = UserDefaults.standard.string(forKey: "scpTarget"), !target.isEmpty {
+            dbg("hotkey_scp_redirect: scpTarget=\(target)")
+            captureAndSendViaSCP()
+            return
+        }
         dbg("captureAndShare_start")
 
         SCShareableContent.getWithCompletionHandler { [weak self] content, error in

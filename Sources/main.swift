@@ -326,7 +326,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
         if scp.terminationStatus == 0 {
             dbg("scp_success: sent to \(scpTarget)")
             try? FileManager.default.removeItem(atPath: file)
-            exit(0)
+            let isCLI = CommandLine.arguments.contains("--scp") || CommandLine.arguments.contains("--once")
+            if isCLI { exit(0) }
         } else {
             dbg("scp_failed status=\(scp.terminationStatus): falling back to airdrop once mode")
             isSharing = false

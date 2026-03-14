@@ -305,8 +305,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSSharingServiceDelega
 
     // --scp mode: capture display 1, SCP to configured remote, exit. No AirDrop UI, no focus steal.
     // Falls back to AirDrop --once behaviour if SCP fails. (Issue #15)
+    // Issue #18: --scp-target CLI arg takes priority over UserDefaults scpTarget key.
     private func captureAndSendViaSCP() {
-        guard let scpTarget = UserDefaults.standard.string(forKey: "scpTarget"), !scpTarget.isEmpty else {
+        // Resolve SCP target: CLI arg → UserDefaults → fallback to AirDrop
+        var resolvedTarget: String? = nil
+        if let idx = CommandLine.arguments.firstIndex(of: "--scp-target"),
+           idx + 1 < CommandLine.arguments.count {
+            resolvedTarget = CommandLine.arguments[idx + 1]
+            dbg("scp_target_from_args: \(resolvedTarget!)")
+        }
+        if resolvedTarget == nil || resolvedTarget!.isEmpty {
+            resolvedTarget = UserDefaults.standard.string(forKey: "scpTarget")
+        }
+        guard let scpTarget = resolvedTarget, !scpTarget.isEmpty else {
             dbg("scp_no_target: falling back to airdrop once mode")
             captureAndShareOnce()
             return
